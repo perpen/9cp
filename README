@@ -1,5 +1,6 @@
 Steps
 - qemu-img create -f raw disk.raw 10G
+- Optionally use ./dev to create vm, ./dev start (9front-iso|test)
 - Start qemu with 9front.iso and blank disk.raw
 - Install 9front on disk
 - Reboot qemu to test
@@ -11,16 +12,16 @@ Steps
 - Start vm and connect to console: ./dev start NAME
 
 Problems
-- If cwfs boot disk on gcp is wrong (sd01 vs sd00)
+- If using cwfs and the vm boots on the wrong disk (sd01 vs sd00):
     At bootprompt add "-c", will prompt for config, enter the filsys lines below.
     To make permanent:
-    cirno# cat oo
-    filsys main c(/dev/sd01/fscache)(/dev/sd01/fsworm)
-    filsys dump o
-    filsys other /dev/sd01/other
-    end
-    cirno# cat oo >> /srv/cwfs.cmd
-    cirno# fshalt -r
+        cirno# cat oo
+        filsys main c(/dev/sd01/fscache)(/dev/sd01/fsworm)
+        filsys dump o
+        filsys other /dev/sd01/other
+        end
+        cirno# cat oo >> /srv/cwfs.cmd
+        cirno# fshalt -r
 
 Obsolete
 If ever needed to boot via grub, this worked, with a small partition for grub
