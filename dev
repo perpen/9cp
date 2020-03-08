@@ -1,0 +1,109 @@
+#!/bin/bash
+set -ex
+
+vm() {
+    local mode=$1
+
+	#local ram=$(awk '/MemTotal:/ { printf "%d", $2/1024-250 }' /proc/meminfo)
+    local ram=1300 # g1-small instance has 1.7G ram
+    local opts=
+    local cd=
+    local disk0=
+    local disk1=
+
+    case $mode in
+    debian-install)
+        cd=debian.iso
+        ;;
+    debian-boot)
+        disk0=debian.raw
+        disk1=disk.raw
+    	;;
+	9front-iso)
+    	cd=9front.iso
+        disk0=disk.raw
+    	;;
+    test)
+        disk0=disk.raw
+    	#opts+="-curses "
+    	;;
+    *)
+    	echo "unknown mode: $mode" 1>&2
+    	exit 1
+    esac
+
+    [ -z $cd ] || opts+="-drive if=none,id=vd3,format=raw,file=$cd \
+        -device scsi-cd,drive=vd3,bootindex=0 "
+    [ -z $disk0 ] || opts+="-drive if=none,id=vd0,format=raw,file=$disk0 \
+		-device scsi-hd,drive=vd0 "
+    [ -z $disk1 ] || opts+="-drive if=none,id=vd1,format=raw,file=$disk1 \
+		-device scsi-hd,drive=vd1 "
+
+	qemu-system-x86_64 \
+		-m $ram -smp $(nproc) \
+		-net user,$forwards \
+		-net nic,model=e1000 \
+		-device virtio-scsi-pci,id=scsi \
+		$opts
+}
+
+upload() {
+    local name=$1
+    [ -z $name ] && {
+        echo "usage: upload NAME"
+        exit
+    }
+    local tar=$name
+    tar --format=oldgnu -Sczf $tar.tar.gz disk.raw
+    gsutil list gs://9cp || gsutil mb -l $REGION gs://9cp
+    gsutil rm gs://9cp/$tar.tar.gz || true
+    gsutil cp $tar.tar.gz gs://9cp
+    gcloud compute images delete ken --quiet || true
+    gcloud compute images create $name \
+        --storage-location=$REGION \
+        --source-uri gs://9cp/$tar.tar.gz
+}
+
+start() {
+    local name=$1
+    [ -z $name ] && {
+        echo "usage: start NAME"
+        exit
+    }
+
+    gcloud compute instances create $name \
+        --zone $ZONE \
+        --image $name \
+        --machine-type=g1-small \
+        --metadata serial-port-enable=TRUE \
+        --no-boot-disk-auto-delete \
+        --tags ninecp
+
+    serial $name
+}
+
+serial() {
+    local name=$1
+    [ -z $name ] && {
+        echo "usage: serial NAME"
+        exit
+    }
+    gcloud compute connect-to-serial-port --zone $ZONE $name
+}
+
+http() {
+    # hget http://10.0.2.2:9090 | rc
+    while :; do
+        local sz=$(wc -c ins | awk '{print $1}')
+        sz=$(( sz + 2 ))
+        (echo -e "HTTP/1.1 200 OK\r\nContent-Length: $sz\n\n "; cat ins; echo) \
+        | nc -l -p 9090 localhost || true
+    done
+}
+
+source ~henri/.secrets/gcp-defaults.sh
+ZONE=$GCP_HENRI_ZONE
+REGION=$GCP_HENRI_REGION
+
+cd "$(dirname $0)"
+eval "$@"
