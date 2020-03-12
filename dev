@@ -25,7 +25,8 @@ vm() {
     	;;
     test)
         disk0=disk.raw
-    	#opts+="-curses "
+    	# opts+="-curses "
+		# opts+="-nographic "
     	;;
     *)
     	echo "unknown mode: $mode" 1>&2
@@ -58,7 +59,7 @@ upload() {
     gsutil list gs://9cp || gsutil mb -l $REGION gs://9cp
     gsutil rm gs://9cp/$tar.tar.gz || true
     gsutil cp $tar.tar.gz gs://9cp
-    gcloud compute images delete ken --quiet || true
+    gcloud compute images delete $name --quiet || true
     gcloud compute images create $name \
         --storage-location=$REGION \
         --source-uri gs://9cp/$tar.tar.gz
@@ -71,13 +72,31 @@ start() {
         exit
     }
 
+    local machine_type=g1-small
+    local ip_opt=
+
+    case $name in
+    ken)
+        ip_opt="--address=34.89.52.120 \
+            --private-network-ip=10.154.0.53 \
+            --disk=name=$name,device-name=$name,mode=rw,boot=yes"
+        ;;
+    cpu1)
+        ip_opt="--image $name \
+            --no-boot-disk-auto-delete"
+        ;;
+    *)
+        echo "unknown: $name" 1>&2
+        exit 2
+        ;;
+    esac
+
     gcloud compute instances create $name \
         --zone $ZONE \
-        --image $name \
         --machine-type=g1-small \
         --metadata serial-port-enable=TRUE \
-        --no-boot-disk-auto-delete \
-        --tags ninecp
+        --can-ip-forward \
+        $ip_opt
 
     serial $name
 }
