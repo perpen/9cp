@@ -1,10 +1,19 @@
 #!/bin/bash
-set -ex
+set -e
+
+source ~/.secrets/gcp-defaults.sh
+
+HALTD_PORT=5000
+GCP_BUCKET=9cp
+GCP_PROJECT=$GCP_HENRI_PROJECT
+GCP_ZONE=$GCP_HENRI_ZONE
+GCP_REGION=$GCP_HENRI_REGION
+GCP_NETWORK=$GCP_HENRI_NET_9CP
 
 vm() {
     local mode=$1
 
-	#local ram=$(awk '/MemTotal:/ { printf "%d", $2/1024-250 }' /proc/meminfo)
+    #local ram=$(awk '/MemTotal:/ { printf "%d", $2/1024-250 }' /proc/meminfo)
     local ram=1300 # g1-small instance has 1.7G ram
     local opts=
     local cd=
@@ -18,80 +27,241 @@ vm() {
     debian-boot)
         disk0=debian.raw
         disk1=disk.raw
-    	;;
-	9front-iso)
-    	cd=9front.iso
+        ;;
+    9front-iso)
+        cd=9front.iso
         disk0=disk.raw
-    	;;
+        ;;
     test)
         disk0=disk.raw
-    	#opts+="-curses "
-    	;;
+        # opts+="-curses "
+        # opts+="-nographic "
+        ;;
     *)
-    	echo "unknown mode: $mode" 1>&2
-    	exit 1
+        echo "unknown mode: $mode" 1>&2
+        exit 1
     esac
 
     [ -z $cd ] || opts+="-drive if=none,id=vd3,format=raw,file=$cd \
         -device scsi-cd,drive=vd3,bootindex=0 "
     [ -z $disk0 ] || opts+="-drive if=none,id=vd0,format=raw,file=$disk0 \
-		-device scsi-hd,drive=vd0 "
+        -device scsi-hd,drive=vd0 "
     [ -z $disk1 ] || opts+="-drive if=none,id=vd1,format=raw,file=$disk1 \
-		-device scsi-hd,drive=vd1 "
+        -device scsi-hd,drive=vd1 "
 
-	qemu-system-x86_64 \
-		-m $ram -smp $(nproc) \
-		-net user,$forwards \
-		-net nic,model=e1000 \
-		-device virtio-scsi-pci,id=scsi \
-		$opts
+    qemu-system-x86_64 \
+        -m $ram -smp $(nproc) \
+        -net user,$forwards \
+        -net nic,model=e1000 \
+        -device virtio-scsi-pci,id=scsi \
+        $opts
 }
 
 upload() {
     local name=$1
     [ -z $name ] && {
         echo "usage: upload NAME"
-        exit
+        exit 2
     }
     local tar=$name
     tar --format=oldgnu -Sczf $tar.tar.gz disk.raw
-    gsutil list gs://9cp || gsutil mb -l $REGION gs://9cp
-    gsutil rm gs://9cp/$tar.tar.gz || true
-    gsutil cp $tar.tar.gz gs://9cp
-    gcloud compute images delete ken --quiet || true
+    gsutil list gs://$GCP_BUCKET || gsutil mb -l $GCP_REGION gs://$GCP_BUCKET
+    gsutil rm gs://$GCP_BUCKET/$tar.tar.gz || true
+    gsutil cp $tar.tar.gz gs://$GCP_BUCKET
+    gcloud compute images delete $name --quiet || true
     gcloud compute images create $name \
-        --storage-location=$REGION \
-        --source-uri gs://9cp/$tar.tar.gz
+        --storage-location=$GCP_REGION \
+        --source-uri gs://$GCP_BUCKET/$tar.tar.gz
+}
+
+disk-to-image() {
+    local name=$1
+    [[ $# != 1 && $# != 2 ]] && {
+        echo -e "usage: disk-to-image NAME [IMAGE]\n  eg disk-to-image nino\n  or disk-to-image nino nino-123"
+        exit 2
+    }
+    local image="${2:-$name-$(date +%F-%H-%M)}"
+    echo "creating image $image"
+    gcloud compute images create $image \
+        --project=$GCP_PROJECT \
+        --source-disk=$name \
+        --source-disk-zone=$GCP_ZONE
+}
+
+export-image() {
+    local name="$1"
+    [ -z $name ] && {
+        echo "usage: export-image IMAGE_NAME"
+        exit 2
+    }
+    local uri=gs://$GCP_BUCKET/"$name".tar.gz
+    echo "exporting image $name to $uri"
+    gcloud compute images export \
+        --destination-uri "$uri" \
+        --image "$name"
+}
+
+cp-image() {
+    local name="$1"
+    [ -z $name ] && {
+        echo "usage: cp-image IMAGE_NAME_WO_tar.gz"
+        exit 2
+    }
+    local uri=gs://$GCP_BUCKET/"$name".tar.gz
+    echo "downloading $uri to $name.tar.gz"
+    gsutil cp "$uri" $name.tar.gz
+    du -sh $name.tar.gz
+}
+
+download-disk() {
+    local name="$1"
+    [ -z $name ] && {
+        echo "usage: download-disk IMAGE_NAME_WO_tar.gz"
+        return 2
+    }
+    status $name && {
+        echo "refusing to create image for running vm"
+        return 1
+    }
+    local image="$name-$(date +%F-%H-%M)"
+    disk-to-image $name $image
+    export-image $image
+    cp-image $image
+}
+
+status() {
+    local name=$1
+    [ -z $name ] && {
+        echo "usage: status NAME"
+        exit 2
+    }
+    gcloud compute instances list | grep "^$name " || (
+        echo "not running: $name"
+        return 1
+    )
 }
 
 start() {
     local name=$1
     [ -z $name ] && {
         echo "usage: start NAME"
-        exit
+        exit 2
     }
 
-    gcloud compute instances create $name \
-        --zone $ZONE \
-        --image $name \
-        --machine-type=g1-small \
-        --metadata serial-port-enable=TRUE \
-        --no-boot-disk-auto-delete \
-        --tags ninecp
+    local machine_type=g1-small
+    local ip_opt=
 
-    serial $name
+    case $name in
+    nino)
+        machine_type=custom-2-4096
+        # machine_type=custom-4-4096
+        # machine_type=custom-8-8192
+        ip_opt="
+            --network-interface=network=ninecp,address=$GCP_HENRI_NINO_IP,private-network-ip=$GCP_HENRI_NINO_IP_NINECP \
+            --disk=name=$name,device-name=$name,mode=rw,boot=yes"
+        ;;
+    *)
+        echo "unknown: $name" 1>&2
+        exit 2
+        ;;
+    esac
+
+    if gcloud compute instances list | grep -Eq "^$name "; then
+        echo "starting existing machine"
+        gcloud compute instances start $name \
+            --zone $GCP_ZONE
+    else
+        echo "creating machine"
+        gcloud compute instances create $name \
+            --zone $GCP_ZONE \
+            --machine-type=$machine_type \
+            --metadata serial-port-enable=TRUE \
+            --can-ip-forward \
+            $ip_opt
+    fi
+
+    #serial $name
+}
+
+stop() {
+    local name=$1
+    local ip
+    case $name in
+    nino) # this is nino on gcp
+        ip=192.168.0.1
+        ;;
+    *)
+        echo "unknown: $name" 1>&2
+        exit 2
+        ;;
+    esac
+
+    echo halt > /dev/tcp/$ip/$HALTD_PORT
 }
 
 serial() {
     local name=$1
     [ -z $name ] && {
         echo "usage: serial NAME"
-        exit
+        exit 2
     }
-    gcloud compute connect-to-serial-port --zone $ZONE $name
+    gcloud compute connect-to-serial-port --zone $GCP_ZONE $name
 }
 
-http() {
+## creates firewall rules for my current ip to access my vms
+fw() {
+    echo "use gcloud2"; exit 1
+
+    local fw_name=ninecp
+
+    local range="$(curl -sf ifconfig.me)"
+    [ -z $range ] && return 1
+
+    gcloud compute \
+        --project=$GCP_PROJECT \
+        --quiet \
+        firewall-rules delete $fw_name \
+    || true
+
+    local haltd_port=5000
+    local ssh_9="tcp:$haltd_port,tcp:22,tcp:564,tcp:567,tcp:655,tcp:5356,tcp:17007,tcp:17010,tcp:17019,tcp:17567,icmp"
+    local ssh_tinc="tcp:22,tcp:655,icmp"
+    local rules="$ssh_tinc"
+
+    gcloud compute \
+        --project=$GCP_PROJECT \
+        firewall-rules create $fw_name \
+        --description="For laptop to connect to plan9 boxes" \
+        --direction=INGRESS \
+        --priority=1000 \
+        --network=$GCP_NETWORK \
+        --action=ALLOW \
+        --rules=$rules \
+        --source-ranges="$range/32"
+}
+
+term() {
+    echo "if you can't connect, consider running: sudo systemctl start tinc; gcloud2 fw"
+    local name=$1
+    local user=henri
+    case $name in
+    nino-public-ip)
+        dwm2 workspace 7
+        ip=$GCP_HENRI_NINO_IP
+        exec drawterm -h $ip -s $ip -a $ip -u $user
+        ;;
+    nino)
+        dwm2 workspace 7
+        ip=nino
+        exec drawterm -h $ip -s $ip -a $ip -u $user
+        ;;
+    *)
+        echo "unknown: $name"
+        ;;
+    esac
+}
+
+http-hack() {
     # hget http://10.0.2.2:9090 | rc
     while :; do
         local sz=$(wc -c ins | awk '{print $1}')
@@ -101,9 +271,5 @@ http() {
     done
 }
 
-source ~henri/.secrets/gcp-defaults.sh
-ZONE=$GCP_HENRI_ZONE
-REGION=$GCP_HENRI_REGION
-
 cd "$(dirname $0)"
-eval "$@"
+"$@"

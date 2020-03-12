@@ -1,10 +1,18 @@
+I use this to create an manage a native 9front vm on gcp.
+
+The `./dev` script hardcodes some of my own gcp project config (project, zone, etc)
+but could still be useful to you.
+
+Simple: prepare the disk image in qemu, upload to a gcp disk image.
+
 Steps
 - qemu-img create -f raw disk.raw 10G
-- Optionally use ./dev to create vm, ./dev start (9front-iso|test)
+- Optionally use ./dev to start the vm: ./dev vm (9front-iso|test)
 - Start qemu with 9front.iso and blank disk.raw
 - Install 9front on disk
 - Reboot qemu to test
-- Before upload, add to plan9.ini:
+- Before upload to gcp, add to plan9.ini:
+    vgasize=text
     console=0
     nousbrc=
 - Shutdown qemu
