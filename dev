@@ -26,7 +26,7 @@ vm() {
 	test)
 		disk0=disk.raw
 		# opts+="-curses "
-		# opts+="-nographic "
+		opts+="-nographic "
 		;;
 	*)
 		echo "unknown mode: $mode" 1>&2
@@ -77,13 +77,11 @@ start() {
 
 	case $name in
 	ken)
+    	machine_type=f1-micro
 		ip_opt="--address=34.89.52.120 \
 			--network=ninecp --subnet=ninecp \
 			--disk=name=$name,device-name=$name,mode=rw,boot=yes"
 #		ip_opt="--network-interface=address=34.89.52.120,private-network-ip=10.154.0.53 \
-#			--disk=name=$name,device-name=$name,mode=rw,boot=yes"
-#		ip_opt="--address=34.89.52.120 \
-#			--private-network-ip=10.154.0.53 \
 #			--disk=name=$name,device-name=$name,mode=rw,boot=yes"
 		;;
 	cpu1)
@@ -91,8 +89,16 @@ start() {
 			--network=ninecp --subnet=ninecp \
 			--image $name \
 			--no-boot-disk-auto-delete"
-#		ip_opt="--image $name \
-#			--no-boot-disk-auto-delete"
+		;;
+	half)
+		ip_opt="--address=34.89.65.34 \
+			--network=ninecp --subnet=ninecp \
+			--image $name \
+			--no-boot-disk-auto-delete"
+		# ip_opt="--address=34.89.65.34 \
+		# 	--network=ninecp --subnet=ninecp \
+		# 	--image $name \
+		# 	--no-boot-disk-auto-delete"
 		;;
 	*)
 		echo "unknown: $name" 1>&2
@@ -102,7 +108,7 @@ start() {
 
 	gcloud compute instances create $name \
 		--zone $ZONE \
-		--machine-type=g1-small \
+		--machine-type=$machine_type \
 		--metadata serial-port-enable=TRUE \
 		--can-ip-forward \
 		$ip_opt
