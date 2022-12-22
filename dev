@@ -154,7 +154,9 @@ start() {
     case $name in
     nino)
         # machine_type=custom-2-4096
-        machine_type=custom-4-4096
+        # machine_type=custom-4-4096
+        # machine_type=e2-custom-4-2048
+        machine_type=e2-custom-6-3072
         # machine_type=custom-8-8192
         ip_opt="
             --network-interface=network=ninecp,address=$GCP_HENRI_NINO_IP,private-network-ip=$GCP_HENRI_NINO_IP_NINECP \
